@@ -298,9 +298,6 @@ PostgreSQL
 ```bash
 git clone https://github.com/Paulo68129/novo-repositorio.git
 
-Áreas de Interessegithub.com/Paulo68129/novo-repositorio.git
-
-Áreas de Interesse
 ```
 
 ```bash
