@@ -612,7 +612,7 @@ Serviços disponíveis:
 
 🎓 Análise e Desenvolvimento de Sistemas
 
-🔗 GitHub: https://github.com/Paulo68129
+🔗 GitHub: https://github.com/Paulo68129/novo-repositorio.git
 
 ### Áreas de Interesse
 
