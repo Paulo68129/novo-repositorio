@@ -16,7 +16,8 @@ import { useNewOrderSound } from "@/hooks/useNewOrderSound";
 import { useOnlineOrdersRealtime } from "@/hooks/useOnlineOrdersRealtime";
 import { aceitarPedido, recusarPedido, confirmarPagamento, salvarPedido } from "@/lib/online-order-api";
 import { normalizeItems } from "@/lib/online-order";
-import { CheckCircle, XOctagon, MapPin, Phone, Clock, FileText, User, ShoppingBag, X, Download, Trash2, AlertTriangle, Save, Search, Globe, Filter, Calendar } from "lucide-react";
+import { CheckCircle, XOctagon, MapPin, Phone, Clock, FileText, User, ShoppingBag, X, Download, Trash2, AlertTriangle, Save, Search, Globe, Filter, Calendar, Bell } from "lucide-react";
+import { NewOrderBanner } from "@/components/NewOrderBanner";
 
 export const Route = createFileRoute("/_authenticated/delivery")({
   head: () => ({ meta: [{ title: "Delivery — PizzaStockAI" }, { name: "description", content: "Acompanhe pedidos de delivery do preparo à entrega." }, { property: "og:title", content: "Delivery — PizzaStockAI" }, { property: "og:description", content: "Quadro de pedidos de delivery." }] }),
@@ -25,10 +26,8 @@ export const Route = createFileRoute("/_authenticated/delivery")({
   component: Delivery,
 });
 
-// Fluxo unificado de 6 etapas para todos os tipos de pedido
+// Fluxo simplificado de 4 etapas: pedidos vão direto para a linha de preparo
 const cols = [
-  { s: "pendente", t: "📥 Pedidos Recentes", next: "recebido", btn: "Receber Pedido" },
-  { s: "recebido", t: "✅ Pedido Recebido", next: "preparando", btn: "Preparando Pedido" },
   { s: "preparando", t: "👨‍🍳 Preparando", next: "pronto", btn: "Pedido Pronto" },
   { s: "pronto", t: "📦 Pronto", next: "em_entrega", btn: "Saiu p/ Entrega" },
   { s: "em_entrega", t: "🚚 Saiu p/ Entrega", next: "finalizado", btn: "Finalizar" },
@@ -36,12 +35,13 @@ const cols = [
 ] as const;
 
 // Mapeia status de pedidos_online para colunas do delivery
+// Novos pedidos vão direto para "preparando" (linha de preparo)
 const onlineStatusMap: Record<string, string> = {
-  "pendente": "pendente",
-  "aguardando_pagamento": "pendente",
-  "pago": "pendente",
-  "novo": "pendente",
-  "recebido": "recebido",
+  "pendente": "preparando",
+  "aguardando_pagamento": "preparando",
+  "pago": "preparando",
+  "novo": "preparando",
+  "recebido": "preparando",
   "preparando": "preparando",
   "preparo": "preparando",
   "pronto": "pronto",
@@ -52,9 +52,9 @@ const onlineStatusMap: Record<string, string> = {
   "cancelado": "cancelado",
 };
 
-// Verifica se um pedido online está pendente (aguardando aceitação)
+// Verifica se um pedido online está na fila de preparo (novos ou aguardando)
 function isPedidoPendente(p: any): boolean {
-  return p.status_delivery === "pendente" || p.status === "pendente" || p.status === "aguardando_pagamento";
+  return p.status === "pendente" || p.status === "aguardando_pagamento" || p.status === "pago" || p.status === "novo";
 }
 
 function Delivery() {
@@ -375,21 +375,20 @@ function Delivery() {
       }
     }
 
-    // Tenta RPC avancar_status_pedido primeiro (com validação de transição)
-    const rpcResult = await (supabase as any).rpc("avancar_status_pedido", {
-      _pedido_id: id,
-      _novo_status: newStatus,
-      _motivo: patch.motoboy_id ? null : "",
-    });
-
-    if (rpcResult.error) {
-      // Fallback: atualiza status diretamente
-      const { error } = await supabase
-        .from("pedidos_online")
-        .update({ status: newStatus, motoboy_id: patch.motoboy_id })
-        .eq("id", id);
-      if (error) { toast.error(error.message); return; }
+    // Fallback: atualiza status diretamente (RPC opcional)
+    const updatePayload: { status?: string; motoboy_id?: string | null; entregue_em?: string } = { status: newStatus };
+    if (patch.motoboy_id !== undefined) {
+      updatePayload.motoboy_id = patch.motoboy_id;
     }
+    // Se o status é finalizado, registra o timestamp de entrega
+    if (newStatus === "finalizado") {
+      updatePayload.entregue_em = new Date().toISOString();
+    }
+    const { error } = await supabase
+      .from("pedidos_online")
+      .update(updatePayload)
+      .eq("id", id);
+    if (error) { toast.error(error.message); return; }
 
     qc.invalidateQueries({ queryKey: ["pedidos-online-delivery"] });
   }
@@ -402,13 +401,13 @@ function Delivery() {
     }
   }
 
-  // Aceitar pedido online
+  // Aceitar pedido online - vai direto para a linha de preparo
   async function handleAceitarPedido(id: string) {
     try {
       await aceitarPedido(id);
-      toast.success("✅ Pedido aceito! Enviado para produção.", {
-        description: "O cliente foi notificado e o pedido está sendo preparado.",
-        duration: 6000,
+      toast.success("✅ Pedido enviado para a linha de preparo!", {
+        description: "O pedido está sendo preparado agora.",
+        duration: 5000,
       });
       await qc.invalidateQueries({ queryKey: ["pedidos-online-delivery"] });
     } catch (e: any) {
@@ -450,10 +449,40 @@ function Delivery() {
     }
   }
 
-  // Conta pedidos pendentes (aguardando aceitação)
-  const pedidosPendentes = pedidosOnline?.filter(p => 
-    p.status === "pendente" || p.status === "aguardando_pagamento"
-  ).length ?? 0;
+  // Pedidos pendentes para o banner (novos ou aguardando que ainda não foram aceitos)
+  const pedidosPendentesLista = pedidosOnline?.filter(p => 
+    (p.status === "pendente" || p.status === "aguardando_pagamento" || p.status === "pago" || p.status === "novo")
+    && !((p as any).aceito_em)
+  ) || [];
+  const pedidosPendentes = pedidosPendentesLista.length;
+
+  // Handler completo para aceitar pedido via banner
+  async function handleBannerAccept(orderId: string) {
+    try {
+      await aceitarPedido(orderId);
+      toast.success("✅ Pedido aceito e enviado para a linha de preparo!", {
+        description: "O pedido está sendo preparado agora.",
+        duration: 5000,
+      });
+      await qc.invalidateQueries({ queryKey: ["pedidos-online-delivery"] });
+    } catch (e: any) {
+      toast.error(e?.message || "Não foi possível aceitar o pedido");
+    }
+  }
+
+  // Handler completo para recusar pedido via banner
+  async function handleBannerReject(orderId: string, reason: string) {
+    try {
+      await recusarPedido(orderId, reason);
+      toast.info("Pedido recusado", {
+        description: `Motivo: ${reason}`,
+        duration: 5000,
+      });
+      await qc.invalidateQueries({ queryKey: ["pedidos-online-delivery"] });
+    } catch (e: any) {
+      toast.error(e?.message || "Não foi possível recusar o pedido");
+    }
+  }
 
   // Confirmar pagamento recebido - registra a venda no financeiro e dá baixa no estoque
   async function handleConfirmarPagamento() {
@@ -718,6 +747,7 @@ function Delivery() {
             </span>
             {pedidosPendentes > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
+                <Bell className="h-3 w-3" />
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse" />
                 {pedidosPendentes} pendente{pedidosPendentes > 1 ? 's' : ''}
               </span>
@@ -725,6 +755,14 @@ function Delivery() {
           </span>
         }
       />
+
+      {/* Banner de novos pedidos pendentes */}
+      <NewOrderBanner
+        pendingOrders={pedidosPendentesLista}
+        onAccept={handleBannerAccept}
+        onReject={handleBannerReject}
+      />
+
       {/* Botões de ação */}
       <div className="mb-4 flex flex-wrap gap-2">
         <Button
@@ -903,7 +941,7 @@ function Delivery() {
           </div>
         </div>
       )}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {cols.map((c) => {
           const list = getPedidosByColumn(c.s);
           return (
@@ -989,9 +1027,9 @@ function Delivery() {
                         {motoboys.filter((m) => m.ativo).map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
                       </select>
                     )}
-                    {c.s === "pendente" && p.tipo === "online" && (
+                    {/* Pedidos online na coluna preparando - mostrar botão de recusar se ainda não aceito */}
+                    {c.s === "preparando" && p.tipo === "online" && (p.status === "pendente" || p.status === "aguardando_pagamento" || p.status === "pago" || p.status === "novo") && (
                       <div className="mt-2 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
-                        {/* Botão Salvar Pedido - exclusivo para pedidos online */}
                         {!p.salvo_em && (
                           <Button
                             size="sm"
@@ -1006,92 +1044,28 @@ function Delivery() {
                         )}
                         {p.salvo_em && (
                           <div className="rounded bg-green-50 border border-green-200 px-2 py-1 text-[10px] font-semibold text-green-700 text-center">
-                            ✅ Pedido salvo em {new Date(p.salvo_em).toLocaleString("pt-BR", {
-                              day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
-                            })}
+                            ✅ Pedido salvo
                           </div>
                         )}
-                        {/* Confirmar pagamento - aparece quando aguardando pagamento */}
-                        {p.status === "aguardando_pagamento" && (
-                          <div className="rounded-lg border-2 border-yellow-300 bg-yellow-50 p-2">
-                            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-yellow-800">
-                              <Clock className="h-3.5 w-3.5" />
-                              Aguardando pagamento PIX
-                            </div>
-                            <div className="flex gap-2">
-                              <Button
-                                size="sm"
-                                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                                onClick={() => openPaymentConfirmDialog(p.id, p.tipo)}
-                              >
-                                <CheckCircle className="h-4 w-4 mr-1" />
-                                Confirmar Pagamento
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="flex-1 text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white"
-                                onClick={() => openRejectDialog(p.id, p.tipo)}
-                              >
-                                <XOctagon className="h-4 w-4 mr-1" />
-                                Recusar
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-                        {/* Aceitar/Recusar pedido - aparece quando pago ou pendente */}
-                        {p.status !== "aguardando_pagamento" && (
-                          <div className="flex flex-col gap-2">
-                            {p.status === "pago" && (
-                              <div className="rounded-lg border-2 border-green-300 bg-green-50 p-2">
-                                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-green-800">
-                                  <CheckCircle className="h-3.5 w-3.5" />
-                                  Pagamento confirmado - pronto para aceitar
-                                </div>
-                                <div className="flex gap-2">
-                                  <Button
-                                    size="sm"
-                                    className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                                    onClick={() => handleAceitarPedido(p.id)}
-                                  >
-                                    <CheckCircle className="h-4 w-4 mr-1" />
-                                    ✅ Aceitar Pedido
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="flex-1 text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white"
-                                    onClick={() => openRejectDialog(p.id, p.tipo)}
-                                  >
-                                    <XOctagon className="h-4 w-4 mr-1" />
-                                    Recusar
-                                  </Button>
-                                </div>
-                              </div>
-                            )}
-                            {p.status !== "pago" && p.status !== "aguardando_pagamento" && (
-                              <div className="flex gap-2">
-                                <Button
-                                  size="sm"
-                                  className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                                  onClick={() => handleAceitarPedido(p.id)}
-                                >
-                                  <CheckCircle className="h-4 w-4 mr-1" />
-                                  Aceitar Pedido
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="flex-1 text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white"
-                                  onClick={() => openRejectDialog(p.id, p.tipo)}
-                                >
-                                  <XOctagon className="h-4 w-4 mr-1" />
-                                  Recusar
-                                </Button>
-                              </div>
-                            )}
-                          </div>
-                        )}
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                            onClick={() => handleAceitarPedido(p.id)}
+                          >
+                            <CheckCircle className="h-4 w-4 mr-1" />
+                            Iniciar Preparo
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white"
+                            onClick={() => openRejectDialog(p.id, p.tipo)}
+                          >
+                            <XOctagon className="h-4 w-4 mr-1" />
+                            Recusar
+                          </Button>
+                        </div>
                       </div>
                     )}
                     {c.next && c.s !== "pendente" && (

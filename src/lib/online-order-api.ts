@@ -126,7 +126,7 @@ export async function confirmarPagamento(pedidoId: string): Promise<string | nul
   return null;
 }
 
-/** Aceita o pedido no delivery. Tenta RPC primeiro, depois fallback para UPDATE direto. */
+/** Aceita o pedido no delivery. O pedido vai direto para a linha de preparo (status "preparando"). */
 export async function aceitarPedido(pedidoId: string): Promise<void> {
   if (!isUuid(pedidoId)) return;
 
@@ -139,17 +139,16 @@ export async function aceitarPedido(pedidoId: string): Promise<void> {
     console.warn("[delivery] RPC aceitar_pedido indisponível, usando fallback:", errorMessage(e));
   }
 
-  // Fallback: atualiza status diretamente no banco
+  // Fallback: atualiza status diretamente no banco - vai direto para "preparando"
   try {
     const { error } = await supabase
       .from("pedidos_online")
       .update({
-        status: "recebido",
-        status_delivery: "aceito",
+        status: "preparando",
+        status_delivery: "preparando",
         aceito_em: new Date().toISOString(),
       })
-      .eq("id", pedidoId)
-      .eq("status_delivery", "pendente");
+      .eq("id", pedidoId);
 
     if (error) {
       console.warn("[delivery] Fallback aceitar_pedido falhou:", error.message);
