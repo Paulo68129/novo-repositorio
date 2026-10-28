@@ -14,26 +14,43 @@ import {
 class PedidoRecusadoError extends Error {}
 
 /**
- * Fallback de última instância: insere o pedido diretamente na tabela pedidos_online
+ * CAMINHO PRINCIPAL: Insere o pedido diretamente na tabela pedidos_online
  * com status "aguardando_pagamento" para que apareça na coluna 💳 Aguardando Pagamento.
- * Usado quando RPC e server function falham.
+ * 
+ * Este é o método mais confiável pois não depende de funções SQL no banco.
  */
 async function inserirPedidoFallback(pedido: any): Promise<{ token: string; pedido: OnlineOrder }> {
-  console.log("[loja] Fallback: inserindo pedido diretamente no banco");
+  console.log("[loja] === INICIANDO INSERT DIRETO ===");
+  console.log("[loja] Token:", pedido.token);
+  console.log("[loja] Cliente:", pedido.cliente);
+  console.log("[loja] Itens:", JSON.stringify(pedido.itens));
 
   // Busca os produtos para validar preços
   const ids = [...new Set(pedido.itens.map((i: any) => i.produto_id))];
+  console.log("[loja] Buscando produtos:", ids);
+  
   const { data: produtos, error: produtosError } = await supabase
     .from("produtos")
     .select("id, nome, preco")
     .in("id", ids)
     .eq("ativo", true);
-  if (produtosError) throw new Error("Não foi possível validar os produtos");
+  
+  if (produtosError) {
+    console.error("[loja] Erro ao buscar produtos:", produtosError);
+    throw new Error("Não foi possível validar os produtos: " + produtosError.message);
+  }
+  
+  if (!produtos || produtos.length === 0) {
+    console.error("[loja] Nenhum produto encontrado para os IDs:", ids);
+    throw new Error("Nenhum produto encontrado");
+  }
+  
+  console.log("[loja] Produtos encontrados:", produtos.length);
 
   const porId = new Map((produtos ?? []).map((p: any) => [p.id, p]));
   const itens = pedido.itens.map((item: any) => {
     const produto = porId.get(item.produto_id);
-    if (!produto) throw new Error("Produto indisponível");
+    if (!produto) throw new Error("Produto indisponível: " + item.produto_id);
     return {
       nome: produto.nome,
       produto_id: produto.id,
@@ -42,6 +59,7 @@ async function inserirPedidoFallback(pedido: any): Promise<{ token: string; pedi
     };
   });
   const subtotal = Math.round(itens.reduce((s: number, i: any) => s + i.preco_unitario * i.quantidade, 0) * 100) / 100;
+  console.log("[loja] Subtotal:", subtotal);
 
   // Busca taxa de entrega
   const { data: config } = await supabase
@@ -50,6 +68,7 @@ async function inserirPedidoFallback(pedido: any): Promise<{ token: string; pedi
     .eq("id", 1)
     .maybeSingle();
   const taxaEntrega = Number(config?.taxa_entrega ?? 0) || 0;
+  console.log("[loja] Taxa de entrega:", taxaEntrega);
 
   let desconto = 0;
   if (pedido.cupom) {
@@ -62,6 +81,7 @@ async function inserirPedidoFallback(pedido: any): Promise<{ token: string; pedi
     if (!cupom) throw new Error("Cupom inválido");
     desconto = Math.round((subtotal * Number(cupom.percentual)) / 100 * 100) / 100;
   }
+  console.log("[loja] Desconto:", desconto);
 
   const row = {
     id: crypto.randomUUID(),
@@ -81,65 +101,101 @@ async function inserirPedidoFallback(pedido: any): Promise<{ token: string; pedi
     created_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from("pedidos_online").insert(row);
-  if (error) throw new Error(error.message || "Não foi possível registrar o pedido");
+  console.log("[loja] Inserindo pedido no banco:", JSON.stringify({
+    id: row.id,
+    token: row.token,
+    status: row.status,
+    status_delivery: row.status_delivery,
+    total: row.total
+  }));
 
-  console.log("[loja] Fallback: pedido inserido com sucesso, status=aguardando_pagamento");
+  const { data, error } = await supabase.from("pedidos_online").insert(row).select();
+  
+  if (error) {
+    console.error("[loja] === ERRO NO INSERT ===");
+    console.error("[loja] Erro:", JSON.stringify(error));
+    console.error("[loja] Message:", error.message);
+    console.error("[loja] Details:", error.details);
+    console.error("[loja] Hint:", error.hint);
+    
+    // Tenta sem .select() se o RLS bloquear a leitura
+    if (error.message.includes("permission") || error.message.includes("RLS")) {
+      console.log("[loja] Tentando INSERT sem .select() por causa do RLS");
+      const { error: insertError2 } = await supabase.from("pedidos_online").insert(row);
+      if (insertError2) {
+        console.error("[loja] INSERT sem select também falhou:", insertError2.message);
+        throw new Error("Não foi possível registrar o pedido: " + insertError2.message);
+      }
+      console.log("[loja] INSERT sem select成功了");
+    } else {
+      throw new Error("Não foi possível registrar o pedido: " + error.message);
+    }
+  } else {
+    console.log("[loja] === INSERT COM SUCESSO ===");
+    console.log("[loja] Data retornada:", JSON.stringify(data));
+  }
+
+  console.log("[loja] Pedido inserido com sucesso! status=aguardando_pagamento");
   const normalized = normalizeOrder(row);
   if (!normalized) throw new Error("Falha ao montar o pedido");
   return { token: pedido.token, pedido: normalized };
 }
 
 /**
- * Envia o pedido tentando três caminhos independentes com o MESMO token
- * (a função SQL é idempotente por token, então repetir nunca duplica o pedido):
- * 1. RPC direto do navegador (não depende das variáveis de ambiente do servidor);
- * 2. Server function, caso o navegador não consiga falar com o banco;
- * 3. INSERT direto no banco como último recurso.
+ * Envia o pedido usando INSERT direto no banco como caminho principal.
+ * O INSERT direto é o mais confiável pois não depende de funções SQL no banco.
+ * Se o INSERT direto falhar, tenta RPC e server function como fallback.
+ * 
+ * O pedido é criado com status "aguardando_pagamento" para aparecer
+ * na coluna 💳 Aguardando Pagamento na tela de delivery.
  */
 export async function enviarPedidoOnline(
   input: Omit<NovoPedidoInput, "token">,
 ): Promise<{ token: string; pedido: OnlineOrder }> {
   const pedido = parseNovoPedido({ ...input, token: newOrderToken() });
-  let primeiraFalha: string | null = null;
+  
+  console.log("[loja] Enviando pedido:", pedido.token, "cliente:", pedido.cliente);
 
-  // 1. Tenta RPC direto
+  // CAMINHO PRINCIPAL: INSERT direto no banco - mais confiável
   try {
-    const { data, error } = await supabase.rpc("criar_pedido_online", {
-      _token: pedido.token,
-      _cliente: pedido.cliente,
-      _telefone: pedido.telefone,
-      _endereco: pedido.endereco,
-      _itens: pedido.itens,
-      _cupom: pedido.cupom,
-    });
-    if (error) {
-      if (isBusinessError(error)) throw new PedidoRecusadoError(error.message);
-      primeiraFalha = error.message;
-    } else {
-      const criado = normalizeOrder(data);
-      if (criado) return { token: pedido.token, pedido: criado };
-      primeiraFalha = "O banco não confirmou o pedido";
-    }
-  } catch (e) {
-    if (e instanceof PedidoRecusadoError) throw e;
-    primeiraFalha = errorMessage(e);
-  }
-
-  // 2. Tenta server function
-  console.warn("[loja] RPC falhou, tentando server function:", primeiraFalha);
-  try {
-    return await criarPedidoOnline({ data: pedido });
-  } catch (e) {
-    const serverError = errorMessage(e);
-    console.warn("[loja] Server function falhou, tentando INSERT direto:", serverError);
-  }
-
-  // 3. Último recurso: INSERT direto no banco
-  try {
+    console.log("[loja] Tentando INSERT direto no banco (caminho principal)");
     return await inserirPedidoFallback(pedido);
-  } catch (e) {
-    throw new Error(errorMessage(e, primeiraFalha ?? "Não foi possível enviar o pedido"));
+  } catch (insertError) {
+    const insertMsg = errorMessage(insertError);
+    console.warn("[loja] INSERT direto falhou:", insertMsg);
+    
+    // Fallback 1: Tenta RPC
+    try {
+      console.log("[loja] Tentando RPC como fallback");
+      const { data, error } = await supabase.rpc("criar_pedido_online", {
+        _token: pedido.token,
+        _cliente: pedido.cliente,
+        _telefone: pedido.telefone,
+        _endereco: pedido.endereco,
+        _itens: pedido.itens,
+        _cupom: pedido.cupom,
+      });
+      if (!error) {
+        const criado = normalizeOrder(data);
+        if (criado) {
+          console.log("[loja] Pedido criado via RPC com sucesso");
+          return { token: pedido.token, pedido: criado };
+        }
+      }
+    } catch (rpcError) {
+      console.warn("[loja] RPC falhou:", errorMessage(rpcError));
+    }
+    
+    // Fallback 2: Tenta server function
+    try {
+      console.log("[loja] Tentando server function como fallback");
+      return await criarPedidoOnline({ data: pedido });
+    } catch (serverError) {
+      console.warn("[loja] Server function falhou:", errorMessage(serverError));
+    }
+    
+    // Se tudo falhou, lança o erro do INSERT (mais provável de ser o erro real)
+    throw new Error(`Não foi possível enviar o pedido. Erro: ${insertMsg}`);
   }
 }
 

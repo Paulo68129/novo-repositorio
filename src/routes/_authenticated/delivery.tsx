@@ -109,6 +109,9 @@ function Delivery() {
   // Estado para salvar pedido
   const [savingOrder, setSavingOrder] = useState<string | null>(null);
 
+  // Estado para painel de gestão de pedidos (confirmar/cancelar)
+  const [gestaoPedidosOpen, setGestaoPedidosOpen] = useState(false);
+
   // Estado para seção de pedidos salvos
   const [savedOrdersOpen, setSavedOrdersOpen] = useState(false);
   const [savedSearchTerm, setSavedSearchTerm] = useState("");
@@ -780,6 +783,17 @@ function Delivery() {
 
       {/* Botões de ação */}
       <div className="mb-4 flex flex-wrap gap-2">
+        {/* Botão principal: Painel de Gestão de Pedidos */}
+        <Button
+          variant={gestaoPedidosOpen ? "default" : "outline"}
+          size="sm"
+          onClick={() => setGestaoPedidosOpen(!gestaoPedidosOpen)}
+          className={gestaoPedidosOpen ? "bg-green-600 hover:bg-green-700" : ""}
+        >
+          <CreditCard className="h-4 w-4 mr-1" />
+          📋 Gestão de Pedidos ({getPedidosByColumn("aguardando_pagamento").length})
+        </Button>
+
         <Button
           variant="outline"
           size="sm"
@@ -809,6 +823,124 @@ function Delivery() {
           Excluir Entregas Concluídas
         </Button>
       </div>
+
+      {/* Painel de Gestão de Pedidos - Confirmar/Cancelar */}
+      {gestaoPedidosOpen && (
+        <div className="mb-6 rounded-xl border-2 border-green-200 bg-green-50/50 p-4">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5 text-green-600" />
+              <h2 className="text-lg font-semibold text-green-800">
+                📋 Gestão de Pedidos — Aguardando Pagamento
+              </h2>
+              <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+                {getPedidosByColumn("aguardando_pagamento").length}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setGestaoPedidosOpen(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {getPedidosByColumn("aguardando_pagamento").length === 0 ? (
+            <div className="rounded-lg border-2 border-dashed border-green-200 p-8 text-center">
+              <CreditCard className="mx-auto h-8 w-8 text-green-300 mb-2" />
+              <p className="text-green-600 font-medium">
+                ✅ Nenhum pedido aguardando pagamento
+              </p>
+              <p className="text-green-500 text-sm mt-1">
+                Novos pedidos aparecerão aqui automaticamente
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[500px] overflow-y-auto">
+              {getPedidosByColumn("aguardando_pagamento").map((p) => (
+                <div
+                  key={p.id}
+                  className="rounded-lg border bg-white p-4 shadow-sm"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-semibold ${
+                          p.tipo === 'online' 
+                            ? 'bg-blue-100 text-blue-700' 
+                            : p.origem === 'Delivery'
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-orange-100 text-orange-700'
+                        }`}>
+                          {p.tipo === 'online' ? '🌐 Online' : p.origem === 'Delivery' ? '🛵 Delivery' : '🏪 Balcão'}
+                        </span>
+                        {p.numero && (
+                          <span className="text-xs font-mono text-muted-foreground">
+                            #{p.numero}
+                          </span>
+                        )}
+                      </div>
+                      
+                      <div className="font-semibold text-base">{p.cliente}</div>
+                      
+                      <div className="text-sm text-muted-foreground mt-1 space-y-0.5">
+                        <div>📞 {p.telefone}</div>
+                        <div>📍 {p.endereco}</div>
+                        <div>🕐 {new Date(p.created_at).toLocaleString("pt-BR", {
+                          day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+                        })}</div>
+                      </div>
+
+                      {/* Itens do pedido */}
+                      <div className="mt-2 rounded border bg-gray-50 p-2 text-sm">
+                        <div className="font-medium text-xs text-gray-500 mb-1">ITENS DO PEDIDO</div>
+                        {p.itens.map((item: any, idx: number) => (
+                          <div key={idx} className="flex justify-between text-xs py-0.5">
+                            <span>{item.quantidade}× {item.nome}</span>
+                            {item.preco_unitario && (
+                              <span className="text-muted-foreground">
+                                {brl(item.preco_unitario * item.quantidade)}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                        <div className="flex justify-between font-semibold pt-1 border-t mt-1">
+                          <span>TOTAL</span>
+                          <span className="text-green-600">{brl(p.total)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Botões de ação */}
+                    <div className="ml-4 flex flex-col gap-2 min-w-[140px]">
+                      <Button
+                        size="sm"
+                        className="w-full bg-green-600 hover:bg-green-700 text-white"
+                        onClick={() => {
+                          openPaymentConfirmDialog(p.id, p.tipo);
+                        }}
+                      >
+                        <CheckCircle className="h-4 w-4 mr-1" />
+                        ✅ Confirmar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-red-600 border-red-300 hover:bg-red-50 hover:text-red-700"
+                        onClick={() => openRejectDialog(p.id, p.tipo)}
+                      >
+                        <XOctagon className="h-4 w-4 mr-1" />
+                        ❌ Cancelar
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Seção de Pedidos Salvos */}
       {savedOrdersOpen && (
