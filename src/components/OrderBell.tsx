@@ -131,8 +131,13 @@ export function OrderBell({ onNotify }: { onNotify?: (pedido: PedidoAlerta) => v
             // Se falhar, usa itens vazios
           }
 
+          // Gera um número sequencial baseado na data e hora do pedido
+          const dt = new Date(pedidoOnline.created_at);
+          const numero = parseInt(dt.getFullYear().toString().slice(2)) * 10000 + 
+                        (dt.getMonth() + 1) * 100 + 
+                        dt.getDate() + Math.floor(dt.getHours() / 2);
           const pedido: PedidoAlerta = {
-            numero: 0, // pedidos_online não tem número sequencial
+            numero,
             cliente: pedidoOnline.cliente ?? "Cliente",
             telefone: pedidoOnline.telefone,
             endereco: pedidoOnline.endereco,

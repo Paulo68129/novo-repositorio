@@ -68,6 +68,11 @@ export function NewOrderBanner({ pendingOrders, onAccept, onReject }: NewOrderBa
             const itens = normalizeItems(order.itens);
             const createdAt = new Date(order.created_at);
             const timeAgo = getTimeAgo(createdAt);
+            // Gera número do pedido baseado na data/hora
+            const dt = new Date(order.created_at);
+            const numero = parseInt(dt.getFullYear().toString().slice(2)) * 10000 +
+                          (dt.getMonth() + 1) * 100 +
+                          dt.getDate() + Math.floor(dt.getHours() / 2);
 
             return (
               <div
@@ -79,6 +84,9 @@ export function NewOrderBanner({ pendingOrders, onAccept, onReject }: NewOrderBa
                   {/* Informações do pedido */}
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-bold text-orange-700">
+                        Pedido #{numero}
+                      </span>
                       <span className="font-bold text-base text-foreground">
                         {order.cliente}
                       </span>

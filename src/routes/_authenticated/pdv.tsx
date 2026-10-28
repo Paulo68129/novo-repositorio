@@ -54,6 +54,7 @@ function Pdv() {
       console.warn("[PDV] RPC registrar_venda falhou, usando fallback:", rpcResult.error.message);
 
       // Fallback: insere diretamente na tabela vendas
+      // Pedidos de delivery vão direto para "preparando" (linha de preparo)
       try {
         const vendaId = crypto.randomUUID();
         const sub = linhas.reduce((s, l) => s + Number(l.p.preco) * l.q, 0);
@@ -64,7 +65,7 @@ function Pdv() {
         const { error: insertError } = await supabase.from("vendas").insert({
           id: vendaId,
           tipo,
-          status: "pendente",
+          status: tipo === "delivery" ? "preparando" : "pendente",
           cliente: cli.cliente || null,
           telefone: cli.telefone || null,
           endereco: cli.endereco || null,

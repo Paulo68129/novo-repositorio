@@ -16,7 +16,8 @@ import { useNewOrderSound } from "@/hooks/useNewOrderSound";
 import { useOnlineOrdersRealtime } from "@/hooks/useOnlineOrdersRealtime";
 import { aceitarPedido, recusarPedido, confirmarPagamento, salvarPedido } from "@/lib/online-order-api";
 import { normalizeItems } from "@/lib/online-order";
-import { CheckCircle, XOctagon, MapPin, Phone, Clock, FileText, User, ShoppingBag, X, Download, Trash2, AlertTriangle, Save, Search, Globe, Filter, Calendar } from "lucide-react";
+import { CheckCircle, XOctagon, MapPin, Phone, Clock, FileText, User, ShoppingBag, X, Download, Trash2, AlertTriangle, Save, Search, Globe, Filter, Calendar, Bell } from "lucide-react";
+import { NewOrderBanner } from "@/components/NewOrderBanner";
 
 export const Route = createFileRoute("/_authenticated/delivery")({
   head: () => ({ meta: [{ title: "Delivery — PizzaStockAI" }, { name: "description", content: "Acompanhe pedidos de delivery do preparo à entrega." }, { property: "og:title", content: "Delivery — PizzaStockAI" }, { property: "og:description", content: "Quadro de pedidos de delivery." }] }),
@@ -278,10 +279,13 @@ function Delivery() {
     }> = [];
 
     // Adiciona vendas do tipo delivery e balcão
+    // Pedidos de delivery com status "pendente" vão direto para "preparando"
     if (status !== "cancelado") {
+      const vendasParaStatus = status === "preparando"
+        ? pedidosVendas.filter((v) => v.status === "preparando" || v.status === "pendente")
+        : pedidosVendas.filter((v) => v.status === status);
       result.push(
-        ...pedidosVendas
-          .filter((v) => v.status === status)
+        ...vendasParaStatus
           .map((v) => ({
             id: v.id,
             tipo: "venda" as const,
@@ -448,6 +452,41 @@ function Delivery() {
     }
   }
 
+
+  // Pedidos pendentes para o banner (novos que ainda não foram aceitos)
+  const pedidosPendentesLista = pedidosOnline?.filter(p => 
+    (p.status === "pendente" || p.status === "aguardando_pagamento" || p.status === "pago" || p.status === "novo")
+    && !((p as any).aceito_em)
+  ) || [];
+  const pedidosPendentes = pedidosPendentesLista.length;
+
+  // Handler para aceitar pedido via banner
+  async function handleBannerAccept(orderId: string) {
+    try {
+      await aceitarPedido(orderId);
+      toast.success("✅ Pedido aceito e enviado para a linha de preparo!", {
+        description: "O pedido está sendo preparado agora.",
+        duration: 5000,
+      });
+      await qc.invalidateQueries({ queryKey: ["pedidos-online-delivery"] });
+    } catch (e: any) {
+      toast.error(e?.message || "Não foi possível aceitar o pedido");
+    }
+  }
+
+  // Handler para recusar pedido via banner
+  async function handleBannerReject(orderId: string, reason: string) {
+    try {
+      await recusarPedido(orderId, reason);
+      toast.info("Pedido recusado", {
+        description: `Motivo: ${reason}`,
+        duration: 5000,
+      });
+      await qc.invalidateQueries({ queryKey: ["pedidos-online-delivery"] });
+    } catch (e: any) {
+      toast.error(e?.message || "Não foi possível recusar o pedido");
+    }
+  }
 
   // Confirmar pagamento recebido - registra a venda no financeiro e dá baixa no estoque
   async function handleConfirmarPagamento() {
@@ -710,10 +749,23 @@ function Delivery() {
               }`} />
               {realtimeConnected ? "Realtime ativo" : `Fallback polling ${reconnectAttempts > 0 ? `(reconectando: ${reconnectAttempts})` : ""}`}
             </span>
+            {pedidosPendentes > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
+                <Bell className="h-3 w-3" />
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse" />
+                {pedidosPendentes} pendente{pedidosPendentes > 1 ? 's' : ''}
+              </span>
+            )}
           </span>
         }
       />
 
+      {/* Banner de novos pedidos pendentes */}
+      <NewOrderBanner
+        pendingOrders={pedidosPendentesLista}
+        onAccept={handleBannerAccept}
+        onReject={handleBannerReject}
+      />
 
       {/* Botões de ação */}
       <div className="mb-4 flex flex-wrap gap-2">
@@ -909,6 +961,13 @@ function Delivery() {
                     <div className="flex justify-between font-semibold">
                       <span>
                         {p.tipo === "venda" && p.numero ? `#${p.numero} ` : ""}
+                        {p.tipo === "online" && (() => {
+                          const dt = new Date(p.created_at);
+                          const num = parseInt(dt.getFullYear().toString().slice(2)) * 10000 +
+                                      (dt.getMonth() + 1) * 100 +
+                                      dt.getDate() + Math.floor(dt.getHours() / 2);
+                          return `#${num} `;
+                        })()}
                         {p.cliente}
                         <span className={`ml-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold ${
                           p.tipo === 'online' ? 'bg-blue-100 text-blue-700' :
@@ -979,44 +1038,25 @@ function Delivery() {
                         {motoboys.filter((m) => m.ativo).map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
                       </select>
                     )}
-                    {/* Pedidos online na coluna preparando - mostrar botão de recusar se ainda não aceito */}
-                    {c.s === "preparando" && p.tipo === "online" && (p.status === "pendente" || p.status === "aguardando_pagamento" || p.status === "pago" || p.status === "novo") && (
-                      <div className="mt-2 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
-                        {!p.salvo_em && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="w-full border-blue-300 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
-                            onClick={() => handleSalvarPedido(p.id)}
-                            disabled={savingOrder === p.id}
-                          >
-                            <Save className="h-4 w-4 mr-1" />
-                            {savingOrder === p.id ? "Salvando..." : "💾 Salvar Pedido"}
-                          </Button>
-                        )}
-                        {p.salvo_em && (
-                          <div className="rounded bg-green-50 border border-green-200 px-2 py-1 text-[10px] font-semibold text-green-700 text-center">
-                            ✅ Pedido salvo
-                          </div>
-                        )}
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                            onClick={() => handleAceitarPedido(p.id)}
-                          >
-                            <CheckCircle className="h-4 w-4 mr-1" />
-                            Iniciar Preparo
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="flex-1 text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white"
-                            onClick={() => openRejectDialog(p.id, p.tipo)}
-                          >
-                            <XOctagon className="h-4 w-4 mr-1" />
-                            Recusar
-                          </Button>
+                    {/* Pedidos online na coluna preparando - botão de salvar */}
+                    {c.s === "preparando" && p.tipo === "online" && !p.salvo_em && (
+                      <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full border-blue-300 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                          onClick={() => handleSalvarPedido(p.id)}
+                          disabled={savingOrder === p.id}
+                        >
+                          <Save className="h-4 w-4 mr-1" />
+                          {savingOrder === p.id ? "Salvando..." : "💾 Salvar Pedido"}
+                        </Button>
+                      </div>
+                    )}
+                    {c.s === "preparando" && p.tipo === "online" && p.salvo_em && (
+                      <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                        <div className="rounded bg-green-50 border border-green-200 px-2 py-1 text-[10px] font-semibold text-green-700 text-center">
+                          ✅ Pedido salvo e em preparo
                         </div>
                       </div>
                     )}
