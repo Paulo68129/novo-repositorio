@@ -16,7 +16,7 @@ import { useNewOrderSound } from "@/hooks/useNewOrderSound";
 import { useOnlineOrdersRealtime } from "@/hooks/useOnlineOrdersRealtime";
 import { aceitarPedido, recusarPedido, confirmarPagamento, salvarPedido } from "@/lib/online-order-api";
 import { normalizeItems } from "@/lib/online-order";
-import { CheckCircle, XOctagon, MapPin, Phone, Clock, FileText, User, ShoppingBag, X, Download, Trash2, AlertTriangle, Save, Search, Globe, Filter, Calendar } from "lucide-react";
+import { CheckCircle, XOctagon, MapPin, Phone, Clock, FileText, User, ShoppingBag, X, Download, Trash2, AlertTriangle, Save, Search, Globe, Filter, Calendar, CreditCard } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/delivery")({
   head: () => ({ meta: [{ title: "Delivery — PizzaStockAI" }, { name: "description", content: "Acompanhe pedidos de delivery do preparo à entrega." }, { property: "og:title", content: "Delivery — PizzaStockAI" }, { property: "og:description", content: "Quadro de pedidos de delivery." }] }),
@@ -25,8 +25,9 @@ export const Route = createFileRoute("/_authenticated/delivery")({
   component: Delivery,
 });
 
-// Fluxo simplificado de 4 etapas: pedidos vão direto para a linha de preparo
+// Fluxo de 5 etapas: pedidos aguardam pagamento antes de ir para a cozinha
 const cols = [
+  { s: "aguardando_pagamento", t: "💳 Aguardando Pagamento", next: "preparando", btn: "Confirmar Pagamento" },
   { s: "preparando", t: "👨‍🍳 Preparando", next: "pronto", btn: "Pedido Pronto" },
   { s: "pronto", t: "📦 Pronto", next: "em_entrega", btn: "Saiu p/ Entrega" },
   { s: "em_entrega", t: "🚚 Saiu p/ Entrega", next: "finalizado", btn: "Finalizar" },
@@ -34,12 +35,12 @@ const cols = [
 ] as const;
 
 // Mapeia status de pedidos_online para colunas do delivery
-// Novos pedidos vão direto para "preparando" (linha de preparo)
+// Pedidos só vão para "preparando" após pagamento confirmado
 const onlineStatusMap: Record<string, string> = {
-  "pendente": "preparando",
-  "aguardando_pagamento": "preparando",
+  "pendente": "aguardando_pagamento",
+  "aguardando_pagamento": "aguardando_pagamento",
   "pago": "preparando",
-  "novo": "preparando",
+  "novo": "aguardando_pagamento",
   "recebido": "preparando",
   "preparando": "preparando",
   "preparo": "preparando",
@@ -450,6 +451,7 @@ function Delivery() {
 
 
   // Confirmar pagamento recebido - registra a venda no financeiro e dá baixa no estoque
+  // O pedido avança direto para a coluna "Preparando" (cozinha)
   async function handleConfirmarPagamento() {
     if (!paymentConfirmOrderId || !paymentConfirmOrderTipo) return;
     setConfirmingPayment(true);
@@ -457,10 +459,25 @@ function Delivery() {
     try {
       if (paymentConfirmOrderTipo === "online") {
         // Usa a função confirmarPagamento que tenta RPC primeiro, depois fallback
+        // O fallback muda o status para "pago", que é mapeado para "preparando"
         const vendaId = await confirmarPagamento(paymentConfirmOrderId);
-        
-        toast.success(`✅ Pagamento confirmado! Pedido liberado para aceitação.`, {
-          description: "Agora clique em 'Aceitar Pedido' para iniciar a preparação.",
+
+        // Além disso, garante que o status_delivery seja "preparando"
+        const { error: deliveryErr } = await supabase
+          .from("pedidos_online")
+          .update({
+            status_delivery: "preparando",
+            aceito_em: new Date().toISOString(),
+          })
+          .eq("id", paymentConfirmOrderId)
+          .eq("status", "pago");
+
+        if (deliveryErr) {
+          console.warn("[delivery] Erro ao atualizar status_delivery:", deliveryErr.message);
+        }
+
+        toast.success(`✅ Pagamento confirmado! Pedido enviado para a cozinha.`, {
+          description: "O pedido agora está na coluna 👨‍🍳 Preparando.",
           duration: 6000,
         });
       } else {
@@ -893,7 +910,7 @@ function Delivery() {
           </div>
         </div>
       )}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {cols.map((c) => {
           const list = getPedidosByColumn(c.s);
           return (
@@ -1008,7 +1025,25 @@ function Delivery() {
                         </div>
                       </div>
                     )}
-                    {c.next && c.s !== "pendente" && (
+                    {/* Na coluna "aguardando_pagamento" - botão de confirmar pagamento */}
+                    {c.s === "aguardando_pagamento" && p.tipo === "online" && (
+                      <div className="mt-2 flex gap-2" onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          size="sm"
+                          className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                          onClick={() => {
+                            openPaymentConfirmDialog(p.id, p.tipo);
+                          }}
+                        >
+                          <CreditCard className="h-4 w-4 mr-1" />
+                          Confirmar Pagamento
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => update(p.id, p.tipo, { status: "cancelado" })}>
+                          Cancelar
+                        </Button>
+                      </div>
+                    )}
+                    {c.next && c.s !== "aguardando_pagamento" && (
                       <div className="mt-2 flex gap-2" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" className="flex-1" onClick={() => update(p.id, p.tipo, { status: c.next! })}>{c.btn}</Button>
                         <Button size="sm" variant="ghost" onClick={() => update(p.id, p.tipo, { status: "cancelado" })}>Cancelar</Button>
@@ -1334,9 +1369,9 @@ function Delivery() {
       <Dialog open={paymentConfirmDialogOpen} onOpenChange={setPaymentConfirmDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirmação de Pagamento</DialogTitle>
+            <DialogTitle>💳 Confirmar Pagamento</DialogTitle>
             <DialogDescription>
-              Confirme que o pagamento PIX foi recebido do cliente.
+              Confirme que o pagamento foi recebido do cliente para enviar o pedido para a cozinha.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
@@ -1344,10 +1379,10 @@ function Delivery() {
               <p className="text-sm font-medium">O que acontece ao confirmar?</p>
               <ul className="text-sm text-muted-foreground space-y-1">
                 <li>✅ Venda registrada no financeiro</li>
-                <li>✅ Estoque atualizado automaticamente</li>
-                <li>✅ Status muda para "Pagamento Confirmado"</li>
+                <li>✅ Estoque baixado automaticamente</li>
+                <li>✅ Pedido enviado para 👨‍🍳 Preparando</li>
                 <li>✅ Cliente recebe notificação em tempo real</li>
-                <li>✅ Pedido liberado para aceitação</li>
+                <li>✅ Cozinha começa a preparar</li>
               </ul>
             </div>
             <div className="flex flex-col gap-2">
@@ -1357,8 +1392,8 @@ function Delivery() {
                 onClick={handleConfirmarPagamento}
                 disabled={confirmingPayment}
               >
-                <CheckCircle className="h-5 w-5 mr-2" />
-                {confirmingPayment ? "Registrando..." : "✅ Confirmar Pagamento Recebido"}
+                <CreditCard className="h-5 w-5 mr-2" />
+                {confirmingPayment ? "Confirmando..." : "✅ Sim, Pagamento Confirmado"}
               </Button>
               <Button
                 variant="outline"

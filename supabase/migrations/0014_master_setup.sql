@@ -724,7 +724,7 @@ BEGIN
   ) VALUES (
     _token, trim(_cliente), trim(_telefone), trim(_endereco), snap,
     sub, disc, coalesce(fee, 0), sub - disc + coalesce(fee, 0),
-    nullif(trim(_cupom), ''), 'loja_online', 'preparando', 'preparando'
+    nullif(trim(_cupom), ''), 'loja_online', 'aguardando_pagamento', 'aguardando_pagamento'
   ) RETURNING to_jsonb(pedidos_online) - 'token' INTO result;
 
   RETURN result;
