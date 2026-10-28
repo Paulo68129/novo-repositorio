@@ -74,6 +74,7 @@ function Pdv() {
           taxa_entrega: taxa,
           total,
           cupom: cli.cupom.trim() || null,
+          criado_por: (await supabase.auth.getUser()).data?.user?.id || null,
         });
 
         if (insertError) {
@@ -94,7 +95,7 @@ function Pdv() {
           });
         }
 
-        toast.success("Venda registrada!");
+        toast.success("✅ Pedido registrado! Aguardando pagamento na tela de Delivery.");
       } catch (e: any) {
         setBusy(false);
         toast.error(e?.message || "Erro ao registrar venda");
@@ -102,7 +103,7 @@ function Pdv() {
       }
     } else {
       setBusy(false);
-      toast.success("Venda registrada!");
+      toast.success("✅ Pedido registrado! Aguardando pagamento na tela de Delivery.");
     }
 
     setBusy(false);

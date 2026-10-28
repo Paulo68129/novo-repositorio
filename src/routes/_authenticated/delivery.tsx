@@ -54,11 +54,29 @@ const onlineStatusMap: Record<string, string> = {
 
 
 function Delivery() {
-  const { data: vendas } = useSuspenseQuery(vendasQ(2));
+  // Busca vendas PDV com auto-refresh a cada 5 segundos — garante que pedidos PDV aparecem em tempo real
+  const { data: vendas } = useQuery({
+    queryKey: ["vendas-delivery"],
+    refetchInterval: 5000,
+    queryFn: async () => {
+      const desde = new Date(Date.now() - 2 * 86400000).toISOString();
+      const { data, error } = await supabase
+        .from("vendas")
+        .select("*, venda_itens(*)")
+        .gte("created_at", desde)
+        .in("tipo", ["delivery", "balcao"])
+        .order("created_at", { ascending: false });
+      if (error) {
+        console.error("[Delivery] Erro ao buscar vendas:", error);
+        throw error;
+      }
+      return data as Venda[];
+    },
+  });
   const { data: motoboys } = useSuspenseQuery(motoboysQ);
   const qc = useQueryClient();
-  // Inclui vendas de delivery E balcão — todos seguem o mesmo fluxo
-  const pedidosVendas = vendas.filter((v) => v.tipo === "delivery" || v.tipo === "balcao");
+  // Vendas já filtradas na query — inclui delivery e balcão
+  const pedidosVendas = vendas ?? [];
   const [nfceVenda, setNfceVenda] = useState<Venda | null>(null);
   const [nfceOnline, setNfceOnline] = useState<OnlineOrder | null>(null);
   
@@ -155,7 +173,38 @@ function Delivery() {
     }
   }, [isLoadingPedidos, pedidosOnline, clearPlayedOrders, playNewOrderSound]);
 
-  // Realtime - detecta novos pedidos instantaneamente
+  // Realtime - detecta novas vendas PDV instantaneamente
+  useEffect(() => {
+    const channel = supabase
+      .channel("vendas-pdv-changes")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "vendas" },
+        () => {
+          console.log("[Delivery] 🔔 Nova venda PDV detectada via Realtime");
+          qc.invalidateQueries({ queryKey: ["vendas-delivery"] });
+          // Toca o som de novo pedido
+          playNewOrderSound("pdv-" + Date.now());
+          toast.success("🔔 Novo pedido PDV recebido!", {
+            duration: 5000,
+            position: "top-center",
+          });
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "vendas" },
+        () => {
+          qc.invalidateQueries({ queryKey: ["vendas-delivery"] });
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [qc, playNewOrderSound]);
+
+  // Realtime - detecta novos pedidos online instantaneamente
   const { isConnected: realtimeConnected, reconnectAttempts } = useOnlineOrdersRealtime({
     onNewOrder: useCallback((order: any) => {
       console.log("[Delivery] 🔔 Novo pedido detectado via Realtime:", order.id, "cliente:", order.cliente);
@@ -275,13 +324,19 @@ function Delivery() {
       salvo_por?: string | null;
     }> = [];
 
-    // Adiciona vendas do tipo delivery e balcão
-    // Todos os pedidos PDV com status "aguardando_pagamento" ou "pendente" vão para a coluna de pagamento
+    // Adiciona vendas PDV (delivery e balcão)
+    // Pedidos com status "aguardando_pagamento" ou "pendente" vão para a coluna de pagamento
     if (status !== "cancelado") {
       const vendasParaStatus = status === "preparando"
         ? pedidosVendas.filter((v) => v.status === "preparando")
         : status === "aguardando_pagamento"
           ? pedidosVendas.filter((v) => v.status === "aguardando_pagamento" || v.status === "pendente")
+        : status === "pronto"
+          ? pedidosVendas.filter((v) => v.status === "pronto")
+        : status === "em_entrega"
+          ? pedidosVendas.filter((v) => v.status === "em_entrega")
+        : status === "finalizado"
+          ? pedidosVendas.filter((v) => v.status === "finalizado")
           : pedidosVendas.filter((v) => v.status === status);
       result.push(
         ...vendasParaStatus
@@ -364,6 +419,7 @@ function Delivery() {
       }
     }
 
+    qc.invalidateQueries({ queryKey: ["vendas-delivery"] });
     qc.invalidateQueries({ queryKey: ["vendas"] });
   }
 
@@ -461,30 +517,16 @@ function Delivery() {
 
     try {
       if (paymentConfirmOrderTipo === "online") {
-        // Usa a função confirmarPagamento que tenta RPC primeiro, depois fallback
-        // O fallback muda o status para "pago", que é mapeado para "preparando"
-        const vendaId = await confirmarPagamento(paymentConfirmOrderId);
-
-        // Além disso, garante que o status_delivery seja "preparando"
-        const { error: deliveryErr } = await supabase
-          .from("pedidos_online")
-          .update({
-            status_delivery: "preparando",
-            aceito_em: new Date().toISOString(),
-          })
-          .eq("id", paymentConfirmOrderId)
-          .eq("status", "pago");
-
-        if (deliveryErr) {
-          console.warn("[delivery] Erro ao atualizar status_delivery:", deliveryErr.message);
-        }
+        // confirmarPagamento já atualiza status para "pago" e status_delivery para "preparando"
+        // O onlineStatusMap mapeia "pago" → "preparando" automaticamente
+        await confirmarPagamento(paymentConfirmOrderId);
 
         toast.success(`✅ Pagamento confirmado! Pedido enviado para a cozinha.`, {
           description: "O pedido agora está na coluna 👨‍🍳 Preparando.",
           duration: 6000,
         });
       } else {
-        // Para vendas PDV, apenas avança para o próximo status
+        // Para vendas PDV, avança para "preparando"
         await updateVenda(paymentConfirmOrderId, { status: "preparando" });
         toast.success("Pagamento confirmado! Iniciando preparo.");
       }
@@ -493,6 +535,7 @@ function Delivery() {
       setPaymentConfirmOrderId(null);
       setPaymentConfirmOrderTipo(null);
       await qc.invalidateQueries({ queryKey: ["pedidos-online-delivery"] });
+      await qc.invalidateQueries({ queryKey: ["vendas-delivery"] });
       await qc.invalidateQueries({ queryKey: ["vendas"] });
       await qc.invalidateQueries({ queryKey: ["ingredientes"] });
     } catch (e: any) {

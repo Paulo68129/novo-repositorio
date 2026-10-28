@@ -14,10 +14,88 @@ import {
 class PedidoRecusadoError extends Error {}
 
 /**
- * Envia o pedido tentando dois caminhos independentes com o MESMO token
+ * Fallback de última instância: insere o pedido diretamente na tabela pedidos_online
+ * com status "aguardando_pagamento" para que apareça na coluna 💳 Aguardando Pagamento.
+ * Usado quando RPC e server function falham.
+ */
+async function inserirPedidoFallback(pedido: any): Promise<{ token: string; pedido: OnlineOrder }> {
+  console.log("[loja] Fallback: inserindo pedido diretamente no banco");
+
+  // Busca os produtos para validar preços
+  const ids = [...new Set(pedido.itens.map((i: any) => i.produto_id))];
+  const { data: produtos, error: produtosError } = await supabase
+    .from("produtos")
+    .select("id, nome, preco")
+    .in("id", ids)
+    .eq("ativo", true);
+  if (produtosError) throw new Error("Não foi possível validar os produtos");
+
+  const porId = new Map((produtos ?? []).map((p: any) => [p.id, p]));
+  const itens = pedido.itens.map((item: any) => {
+    const produto = porId.get(item.produto_id);
+    if (!produto) throw new Error("Produto indisponível");
+    return {
+      nome: produto.nome,
+      produto_id: produto.id,
+      quantidade: item.quantidade,
+      preco_unitario: Number(produto.preco),
+    };
+  });
+  const subtotal = Math.round(itens.reduce((s: number, i: any) => s + i.preco_unitario * i.quantidade, 0) * 100) / 100;
+
+  // Busca taxa de entrega
+  const { data: config } = await supabase
+    .from("loja_config")
+    .select("taxa_entrega")
+    .eq("id", 1)
+    .maybeSingle();
+  const taxaEntrega = Number(config?.taxa_entrega ?? 0) || 0;
+
+  let desconto = 0;
+  if (pedido.cupom) {
+    const { data: cupom } = await supabase
+      .from("cupons")
+      .select("percentual")
+      .ilike("codigo", pedido.cupom)
+      .eq("ativo", true)
+      .maybeSingle();
+    if (!cupom) throw new Error("Cupom inválido");
+    desconto = Math.round((subtotal * Number(cupom.percentual)) / 100 * 100) / 100;
+  }
+
+  const row = {
+    id: crypto.randomUUID(),
+    token: pedido.token,
+    cliente: pedido.cliente,
+    telefone: pedido.telefone,
+    endereco: pedido.endereco,
+    itens,
+    subtotal,
+    desconto,
+    taxa_entrega: taxaEntrega,
+    total: Math.round((subtotal - desconto + taxaEntrega) * 100) / 100,
+    cupom: pedido.cupom || null,
+    status: "aguardando_pagamento",
+    status_delivery: "aguardando_pagamento",
+    origem: "loja_online",
+    created_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from("pedidos_online").insert(row);
+  if (error) throw new Error(error.message || "Não foi possível registrar o pedido");
+
+  console.log("[loja] Fallback: pedido inserido com sucesso, status=aguardando_pagamento");
+  const normalized = normalizeOrder(row);
+  if (!normalized) throw new Error("Falha ao montar o pedido");
+  return { token: pedido.token, pedido: normalized };
+}
+
+/**
+ * Envia o pedido tentando três caminhos independentes com o MESMO token
  * (a função SQL é idempotente por token, então repetir nunca duplica o pedido):
  * 1. RPC direto do navegador (não depende das variáveis de ambiente do servidor);
- * 2. Server function, caso o navegador não consiga falar com o banco.
+ * 2. Server function, caso o navegador não consiga falar com o banco;
+ * 3. INSERT direto no banco como último recurso.
  */
 export async function enviarPedidoOnline(
   input: Omit<NovoPedidoInput, "token">,
@@ -25,6 +103,7 @@ export async function enviarPedidoOnline(
   const pedido = parseNovoPedido({ ...input, token: newOrderToken() });
   let primeiraFalha: string | null = null;
 
+  // 1. Tenta RPC direto
   try {
     const { data, error } = await supabase.rpc("criar_pedido_online", {
       _token: pedido.token,
@@ -47,9 +126,18 @@ export async function enviarPedidoOnline(
     primeiraFalha = errorMessage(e);
   }
 
-  console.warn("[loja] Envio direto falhou, tentando pelo servidor:", primeiraFalha);
+  // 2. Tenta server function
+  console.warn("[loja] RPC falhou, tentando server function:", primeiraFalha);
   try {
     return await criarPedidoOnline({ data: pedido });
+  } catch (e) {
+    const serverError = errorMessage(e);
+    console.warn("[loja] Server function falhou, tentando INSERT direto:", serverError);
+  }
+
+  // 3. Último recurso: INSERT direto no banco
+  try {
+    return await inserirPedidoFallback(pedido);
   } catch (e) {
     throw new Error(errorMessage(e, primeiraFalha ?? "Não foi possível enviar o pedido"));
   }
@@ -103,21 +191,25 @@ export async function confirmarPagamento(pedidoId: string): Promise<string | nul
     console.warn("[delivery] RPC confirmar_pagamento_online indisponível, usando fallback:", errorMessage(e));
   }
 
-  // Fallback: apenas atualiza o status para "pago"
+  // Fallback: atualiza status para "pago" e status_delivery para "preparando"
+  // Remove a restrição .eq("status", "aguardando_pagamento") para aceitar qualquer status pendente
   try {
     const { error } = await supabase
       .from("pedidos_online")
       .update({
         status: "pago",
+        status_delivery: "preparando",
         status_pagamento: "pago",
+        pago_em: new Date().toISOString(),
+        aceito_em: new Date().toISOString(),
       })
-      .eq("id", pedidoId)
-      .eq("status", "aguardando_pagamento");
+      .eq("id", pedidoId);
 
     if (error) {
       console.warn("[delivery] Fallback confirmar_pagamento falhou:", error.message);
       throw new Error(error.message);
     }
+    console.log("[delivery] Fallback confirmar_pagamento: status=pago, status_delivery=preparando");
   } catch (e) {
     console.warn("[delivery] Erro no fallback confirmar pagamento:", errorMessage(e));
     throw e;

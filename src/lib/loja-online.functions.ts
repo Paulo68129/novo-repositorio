@@ -97,6 +97,8 @@ async function inserirPedidoDireto(db: ServerDb, pedido: NovoPedido): Promise<{ 
     total: round2(subtotal - desconto + taxaEntrega),
     cupom: pedido.cupom || null,
     status: "aguardando_pagamento",
+    status_delivery: "aguardando_pagamento",
+    origem: "loja_online",
     created_at: new Date().toISOString(),
   };
   // No .select(): anonymous clients may insert but not read the table back.
