@@ -275,13 +275,40 @@ function Delivery() {
     }> = [];
 
     // Adiciona vendas do tipo delivery e balcão
-    // Pedidos de delivery com status "pendente" vão direto para "preparando"
+    // Pedidos PDV com status "pendente" vão direto para "preparando"
     if (status !== "cancelado") {
       const vendasParaStatus = status === "preparando"
         ? pedidosVendas.filter((v) => v.status === "preparando" || v.status === "pendente")
         : pedidosVendas.filter((v) => v.status === status);
       result.push(
         ...vendasParaStatus
+          .map((v) => ({
+            id: v.id,
+            tipo: "venda" as const,
+            origem: v.tipo === "delivery" ? "Delivery" : "Balcão",
+            cliente: v.cliente || "",
+            telefone: v.telefone || "",
+            endereco: v.endereco || "",
+            total: Number(v.total),
+            subtotal: Number(v.subtotal || 0),
+            desconto: Number(v.desconto || 0),
+            taxa_entrega: Number(v.taxa_entrega || 0),
+            cupom: null,
+            observacoes: null,
+            itens: v.venda_itens.map((i) => ({ nome: i.nome, quantidade: i.quantidade, preco_unitario: Number(i.preco_unitario || 0) })),
+            motoboy_id: v.motoboy_id || null,
+            created_at: v.created_at,
+            numero: v.numero,
+            status: v.status,
+          }))
+      );
+    }
+
+    // Na coluna "aguardando_pagamento", também inclui vendas PDV pendentes de pagamento
+    if (status === "aguardando_pagamento") {
+      const vendasAguardando = pedidosVendas.filter((v) => v.status === "aguardando_pagamento");
+      result.push(
+        ...vendasAguardando
           .map((v) => ({
             id: v.id,
             tipo: "venda" as const,
