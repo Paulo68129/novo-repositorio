@@ -57,7 +57,8 @@ function Delivery() {
   const { data: vendas } = useSuspenseQuery(vendasQ(2));
   const { data: motoboys } = useSuspenseQuery(motoboysQ);
   const qc = useQueryClient();
-  const pedidosVendas = vendas.filter((v) => v.tipo === "delivery");
+  // Inclui vendas de delivery E balcão — todos seguem o mesmo fluxo
+  const pedidosVendas = vendas.filter((v) => v.tipo === "delivery" || v.tipo === "balcao");
   const [nfceVenda, setNfceVenda] = useState<Venda | null>(null);
   const [nfceOnline, setNfceOnline] = useState<OnlineOrder | null>(null);
   
