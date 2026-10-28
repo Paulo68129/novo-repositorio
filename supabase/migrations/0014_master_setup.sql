@@ -720,11 +720,11 @@ BEGIN
 
   INSERT INTO pedidos_online (
     token, cliente, telefone, endereco, itens,
-    subtotal, desconto, taxa_entrega, total, cupom, origem
+    subtotal, desconto, taxa_entrega, total, cupom, origem, status, status_delivery
   ) VALUES (
     _token, trim(_cliente), trim(_telefone), trim(_endereco), snap,
     sub, disc, coalesce(fee, 0), sub - disc + coalesce(fee, 0),
-    nullif(trim(_cupom), ''), 'loja_online'
+    nullif(trim(_cupom), ''), 'loja_online', 'preparando', 'preparando'
   ) RETURNING to_jsonb(pedidos_online) - 'token' INTO result;
 
   RETURN result;

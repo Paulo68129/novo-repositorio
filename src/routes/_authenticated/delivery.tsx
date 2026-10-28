@@ -16,8 +16,7 @@ import { useNewOrderSound } from "@/hooks/useNewOrderSound";
 import { useOnlineOrdersRealtime } from "@/hooks/useOnlineOrdersRealtime";
 import { aceitarPedido, recusarPedido, confirmarPagamento, salvarPedido } from "@/lib/online-order-api";
 import { normalizeItems } from "@/lib/online-order";
-import { CheckCircle, XOctagon, MapPin, Phone, Clock, FileText, User, ShoppingBag, X, Download, Trash2, AlertTriangle, Save, Search, Globe, Filter, Calendar, Bell } from "lucide-react";
-import { NewOrderBanner } from "@/components/NewOrderBanner";
+import { CheckCircle, XOctagon, MapPin, Phone, Clock, FileText, User, ShoppingBag, X, Download, Trash2, AlertTriangle, Save, Search, Globe, Filter, Calendar } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/delivery")({
   head: () => ({ meta: [{ title: "Delivery — PizzaStockAI" }, { name: "description", content: "Acompanhe pedidos de delivery do preparo à entrega." }, { property: "og:title", content: "Delivery — PizzaStockAI" }, { property: "og:description", content: "Quadro de pedidos de delivery." }] }),
@@ -52,10 +51,6 @@ const onlineStatusMap: Record<string, string> = {
   "cancelado": "cancelado",
 };
 
-// Verifica se um pedido online está na fila de preparo (novos ou aguardando)
-function isPedidoPendente(p: any): boolean {
-  return p.status === "pendente" || p.status === "aguardando_pagamento" || p.status === "pago" || p.status === "novo";
-}
 
 function Delivery() {
   const { data: vendas } = useSuspenseQuery(vendasQ(2));
@@ -453,40 +448,6 @@ function Delivery() {
   }
 
 
-  // Pedidos pendentes para o banner (novos que ainda não foram aceitos)
-  const pedidosPendentesLista = pedidosOnline?.filter(p => 
-    (p.status === "pendente" || p.status === "aguardando_pagamento" || p.status === "pago" || p.status === "novo")
-    && !((p as any).aceito_em)
-  ) || [];
-  const pedidosPendentes = pedidosPendentesLista.length;
-
-  // Handler para aceitar pedido via banner
-  async function handleBannerAccept(orderId: string) {
-    try {
-      await aceitarPedido(orderId);
-      toast.success("✅ Pedido aceito e enviado para a linha de preparo!", {
-        description: "O pedido está sendo preparado agora.",
-        duration: 5000,
-      });
-      await qc.invalidateQueries({ queryKey: ["pedidos-online-delivery"] });
-    } catch (e: any) {
-      toast.error(e?.message || "Não foi possível aceitar o pedido");
-    }
-  }
-
-  // Handler para recusar pedido via banner
-  async function handleBannerReject(orderId: string, reason: string) {
-    try {
-      await recusarPedido(orderId, reason);
-      toast.info("Pedido recusado", {
-        description: `Motivo: ${reason}`,
-        duration: 5000,
-      });
-      await qc.invalidateQueries({ queryKey: ["pedidos-online-delivery"] });
-    } catch (e: any) {
-      toast.error(e?.message || "Não foi possível recusar o pedido");
-    }
-  }
 
   // Confirmar pagamento recebido - registra a venda no financeiro e dá baixa no estoque
   async function handleConfirmarPagamento() {
@@ -749,23 +710,10 @@ function Delivery() {
               }`} />
               {realtimeConnected ? "Realtime ativo" : `Fallback polling ${reconnectAttempts > 0 ? `(reconectando: ${reconnectAttempts})` : ""}`}
             </span>
-            {pedidosPendentes > 0 && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
-                <Bell className="h-3 w-3" />
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse" />
-                {pedidosPendentes} pendente{pedidosPendentes > 1 ? 's' : ''}
-              </span>
-            )}
           </span>
         }
       />
 
-      {/* Banner de novos pedidos pendentes */}
-      <NewOrderBanner
-        pendingOrders={pedidosPendentesLista}
-        onAccept={handleBannerAccept}
-        onReject={handleBannerReject}
-      />
 
       {/* Botões de ação */}
       <div className="mb-4 flex flex-wrap gap-2">
