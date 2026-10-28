@@ -875,7 +875,7 @@ begin
     if r.necessario > r.estoque then raise exception 'Estoque insuficiente: %', r.nome; end if;
   end loop;
 
-  v_status := 'pendente';
+  v_status := 'aguardando_pagamento';
   insert into vendas(tipo,status,cliente,telefone,endereco,criado_por) values(_tipo,v_status,_cliente,_telefone,_endereco,auth.uid()) returning id into v_id;
   for it in select * from jsonb_array_elements(_itens) loop
     select * into p from produtos where id=(it->>'produto_id')::uuid;
