@@ -1,5 +1,6 @@
-🍕 PizzaStockAI
-Gestão Inteligente para Pizzarias
+# 🍕 PizzaStockAI — Gestão Inteligente para Pizzarias
+
+Sistema completo de gestão para pizzarias com **PDV**, **delivery**, **loja online**, **controle de estoque**, **gestão financeira**, **previsão de demanda** e **rastreamento de pedidos** em tempo real.
 
 ## 📋 Sumário
 
@@ -493,7 +494,7 @@ create-this-project-main/
 
 ## 🤝 Agradecimentos
 
-Agradecemos ao **Serratec**, ao **SEBRAE**, ao **UNIFESO** e ao **Professor Rodrigo Braga** pela oportunidade, apoio, orientação e incentivo ao desenvolvimento deste projeto.
+Agradecemos ao **UNIFESO** e ao **Professor Rodrigo Braga** pela oportunidade, apoio, orientação e incentivo ao desenvolvimento deste projeto.
 
 O PizzaStockAI representa a união entre **tecnologia, inovação e empreendedorismo**, aplicando conhecimentos de Arquitetura de Software, Desenvolvimento Full Stack, Banco de Dados, UX/UI e Inteligência de Negócios para solucionar desafios reais do mercado.
 
