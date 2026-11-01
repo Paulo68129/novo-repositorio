@@ -1,0 +1,1 @@
+DELETE FROM public.pedidos_online WHERE cliente = 'Teste Migracao' AND telefone = '(11) 99999-0000';

@@ -1,0 +1,5 @@
+ALTER TABLE public.produtos ADD COLUMN IF NOT EXISTS foto_url text;
+GRANT SELECT (id,nome,categoria,descricao,preco,ativo,imagem_path,foto_url) ON public.produtos TO anon;
+CREATE OR REPLACE FUNCTION public.catalogo_online() RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+ SELECT jsonb_build_object('produtos', coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'nome',nome,'categoria',categoria,'descricao',descricao,'preco',preco,'imagem_path',imagem_path,'foto_url',foto_url) ORDER BY categoria,nome) FROM produtos WHERE ativo),'[]'::jsonb),'taxa_entrega',coalesce((SELECT taxa_entrega FROM loja_config WHERE id=1),0),'abre',(SELECT abre FROM loja_config WHERE id=1),'fecha',(SELECT fecha FROM loja_config WHERE id=1),'aberta_manual',(SELECT aberta_manual FROM loja_config WHERE id=1));
+$$;

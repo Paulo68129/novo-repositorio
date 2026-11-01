@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1793287835486,
+      "tag": "0000_base_pizzaria",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793287862583,
+      "tag": "0001_catalogo_delivery",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793287947183,
+      "tag": "0002_fotos_produtos",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793288093731,
+      "tag": "0003_fluxo_pedidos_avaliacoes",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793288233201,
+      "tag": "0004_remover_pedido_teste",
+      "breakpoints": true
+    }
+  ]
+}
